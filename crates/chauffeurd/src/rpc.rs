@@ -329,12 +329,17 @@ async fn handle_other(daemon: &Arc<Daemon>, call: ClientCall) -> Result<Value> {
         ClientCall::DesignCommentsSend(params) => {
             to_value(crate::comments::send(daemon, &params).await?)
         }
+        // As with routines, sharing futures must not enlarge the reentrant transfer handler.
+        call @ (ClientCall::DesignShareStart(_)
+        | ClientCall::DesignShareUpdate(_)
+        | ClientCall::DesignShareStop(_)
+        | ClientCall::DesignShared(_)
+        | ClientCall::FilesShareStart(_)
+        | ClientCall::FilesShareUpdate(_)
+        | ClientCall::FilesShareStop(_)) => handle_sharing(daemon, call).await,
+        ClientCall::SharesList(_) => to_value(daemon.shares.list()?),
         ClientCall::DesignShareState(params) => to_value(daemon.shares.state(&params.chat)?),
-        ClientCall::DesignShareStart(params) => to_value(daemon.shares.start(&params).await?),
-        ClientCall::DesignShareUpdate(params) => to_value(daemon.shares.update(&params).await?),
-        ClientCall::DesignShareStop(params) => to_value(daemon.shares.stop(&params.chat).await?),
         ClientCall::DesignImport(params) => to_value(daemon.shares.import(&params).await?),
-        ClientCall::DesignShared(_) => to_value(daemon.shares.shared().await?),
         ClientCall::MentionsList(_) => to_value(daemon.mentions.list()),
         ClientCall::MentionsSeen(params) => to_value(daemon.mentions.seen(&params.id)?),
         ClientCall::ChatRegenerateBrief(params) => {
@@ -545,6 +550,15 @@ async fn handle_other(daemon: &Arc<Daemon>, call: ClientCall) -> Result<Value> {
                 roots: files::list(&git, &roots).await?,
             })
         }
+        ClientCall::FilesDownload(params) => {
+            if !crate::server::deliverable_path(&params.path) {
+                return Err(Error::BadRequest(
+                    "choose an HTML or PDF document under .chauffeur/artifacts/".into(),
+                ));
+            }
+            let row = daemon.workspaces.row(&params.workspace)?;
+            to_value(daemon.downloads.issue(&row.id, &params.path)?)
+        }
         ClientCall::FilesRead(params) => {
             let (row, roots) = file_roots(daemon, &params.workspace)?;
             let content = files::read(&row, &roots, &params.path)?;
@@ -574,14 +588,6 @@ async fn handle_other(daemon: &Arc<Daemon>, call: ClientCall) -> Result<Value> {
         ClientCall::FilesShareState(params) => {
             to_value(daemon.shares.file_state(&params.workspace, &params.path)?)
         }
-        ClientCall::FilesShareStart(params) => to_value(daemon.shares.start_file(&params).await?),
-        ClientCall::FilesShareUpdate(params) => to_value(daemon.shares.update_file(&params).await?),
-        ClientCall::FilesShareStop(params) => to_value(
-            daemon
-                .shares
-                .stop_file(&params.workspace, &params.path)
-                .await?,
-        ),
         ClientCall::FilesWrite(params) => {
             let (row, roots) = file_roots(daemon, &params.workspace)?;
             let content = files::write(
@@ -929,6 +935,38 @@ async fn handle_other(daemon: &Arc<Daemon>, call: ClientCall) -> Result<Value> {
             Error::BadRequest("subscriptions are handled by the connection".into()),
         ),
     }
+}
+
+// Construct the future in a separate frame: debug builds otherwise reserve all these
+// upload/authentication futures inside each general RPC dispatch, even for transfer calls.
+#[inline(never)]
+fn handle_sharing(
+    daemon: &Arc<Daemon>,
+    call: ClientCall,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Value>> + Send + '_>> {
+    Box::pin(async move {
+        match call {
+            ClientCall::DesignShareStart(params) => to_value(daemon.shares.start(&params).await?),
+            ClientCall::DesignShareUpdate(params) => to_value(daemon.shares.update(&params).await?),
+            ClientCall::DesignShareStop(params) => {
+                to_value(daemon.shares.stop(&params.chat).await?)
+            }
+            ClientCall::FilesShareStart(params) => {
+                to_value(daemon.shares.start_file(&params).await?)
+            }
+            ClientCall::FilesShareUpdate(params) => {
+                to_value(daemon.shares.update_file(&params).await?)
+            }
+            ClientCall::FilesShareStop(params) => to_value(
+                daemon
+                    .shares
+                    .stop_file(&params.workspace, &params.path)
+                    .await?,
+            ),
+            ClientCall::DesignShared(_) => to_value(daemon.shares.shared().await?),
+            _ => unreachable!("only sharing calls reach this handler"),
+        }
+    })
 }
 
 /// A ticket's `## Repo` section is free text ("web-app (one sub-issue each)"): keep the words
