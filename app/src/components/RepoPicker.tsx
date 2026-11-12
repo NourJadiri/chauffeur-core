@@ -5,17 +5,20 @@ import { relativeTime } from "@/lib/format";
 import { openExternal } from "@/lib/native";
 import {
   ALL_OWNERS,
+  cachedPickerRepos,
   GITHUB_ACCESS_URL,
   githubRepoRef,
+  mergeRepos,
   ownerAvatar,
   ownerFilters,
   repoSections,
   shortAge,
   showsOwner,
 } from "@/lib/repoPicker";
-import { loadRepos, useApp } from "@/state/app";
-import { useGithubAccount } from "@/state/github";
+import { useApp } from "@/state/app";
+import { useGithubAccount, useGithubSource } from "@/state/github";
 import { Button, cx, Kbd, Popover } from "./ui";
+import { useRepoPages } from "./useRepoPages";
 
 const WIDTH = 470;
 
@@ -41,24 +44,35 @@ export function RepoPopover({
   const repos = useApp((s) => s.repos);
   const reposError = useApp((s) => s.reposError);
   const sync = useApp((s) => s.reposSync);
+  const sources = useApp((s) => s.reposSources);
   const account = useGithubAccount();
+  const source = useGithubSource();
   const [filter, setFilter] = useState("");
-  const [refreshing, setRefreshing] = useState(false);
   const [owner, setOwner] = useState(ALL_OWNERS);
   const [active, setActive] = useState(0);
   const list = useRef<HTMLDivElement>(null);
-  const all = repos ?? [];
+  const cached = !owner && filter.trim() ? repos ?? [] : cachedPickerRepos(repos ?? [], selection);
 
   // A pasted URL searches for its repo; one no owner lists is offered as is.
   const pasted = githubRepoRef(filter);
+  const pages = useRepoPages(owner, owner ? filter.trim() : "", `${account}/${source?.organization ?? ""}`, !pasted && (!!owner || !filter.trim()));
+  const all = mergeRepos(cached, pages.repos);
+  const refreshing = pages.loading;
+  const githubError = pages.error ?? (pages.refreshedAt ? null : sync.githubError);
+  const refreshedAt = pages.refreshedAt ?? sync.refreshedAt;
   const listed = pasted
     ? all.find((r) => r.key.toLowerCase() === pasted.toLowerCase() || r.full_name.toLowerCase() === pasted.toLowerCase())
     : undefined;
   const query = pasted ?? filter;
   const offered = pasted && !listed && filter.trim().includes("/") ? pasted : null;
-  const sections = repos ? repoSections(all, { owner: offered ? ALL_OWNERS : owner, query, account, selected: selection }) : [];
+  const sections = repoSections(all, { owner: offered ? ALL_OWNERS : owner, query, account, selected: selection });
   const options = [...(offered ? [offered] : []), ...sections.flatMap((s) => s.repos.map((r) => r.key))];
-  const owners = ownerFilters(all, account);
+  const owners = ownerFilters(repos ?? [], account);
+  for (const login of [source?.organization, ...(sources ? [account, ...(source?.organizations ?? [])] : [])]) {
+    if (login && !owners.some((candidate) => candidate.owner.toLowerCase() === login.toLowerCase())) {
+      owners.push({ owner: login, count: 0 });
+    }
+  }
   const ring = Math.min(active, Math.max(0, options.length - 1));
 
   // Typing, or another owner, puts the ring back on the first result.
@@ -67,11 +81,7 @@ export function RepoPopover({
     list.current?.querySelector(`[data-option="${ring}"]`)?.scrollIntoView({ block: "nearest" });
   }, [ring]);
 
-  const refresh = async () => {
-    setRefreshing(true);
-    await loadRepos(true);
-    setRefreshing(false);
-  };
+  const refresh = () => pages.refresh();
   const pick = (key: string) => {
     onToggle(key);
     if (filter) setFilter("");
@@ -106,29 +116,29 @@ export function RepoPopover({
           aria-activedescendant={options.length > 0 ? `repo-option-${ring}` : undefined}
           data-testid="repo-filter"
         />
-        <button type="button" title="Refresh from GitHub" aria-label="Refresh from GitHub" className="shrink-0 text-faint hover:text-fg" onClick={() => void refresh()}>
+        <button type="button" title="Refresh from GitHub" aria-label="Refresh from GitHub" disabled={refreshing || !!pasted || (!owner && !!filter.trim())} className="shrink-0 text-faint hover:text-fg disabled:opacity-40" onClick={refresh}>
           <RefreshCw size={12} className={refreshing ? "animate-spin" : ""} />
         </button>
       </div>
 
-      {sync.githubError && (
+      {githubError && (
         <div className="mx-2.5 mt-2 mb-1 flex shrink-0 items-start gap-[9px] rounded-[7px] border border-danger/30 bg-danger/10 px-[11px] py-[9px] text-danger" data-testid="repos-github-error">
           <span className="mt-px shrink-0">
             <GithubMark size={13} />
           </span>
           <div className="min-w-0 flex-1">
             <div className="font-medium text-fg">GitHub didn't answer: some repos may be missing</div>
-            <div className="truncate font-mono text-[11px]" title={sync.githubError}>
-              {sync.githubError}
+            <div className="truncate font-mono text-[11px]" title={githubError}>
+              {githubError}
             </div>
           </div>
-          <Button size="sm" className="shrink-0" onClick={() => void refresh()} busy={refreshing}>
+          <Button size="sm" className="shrink-0" onClick={pages.retry} busy={refreshing}>
             {!refreshing && <RefreshCw size={11} />} Retry
           </Button>
         </div>
       )}
 
-      {owners.length > 1 && !offered && (
+      {owners.length > 0 && !offered && (
         <div
           className="flex shrink-0 items-center gap-0.5 overflow-x-auto border-b border-line px-1.5 py-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
           role="tablist"
@@ -138,7 +148,7 @@ export function RepoPopover({
             if (Math.abs(e.deltaY) > Math.abs(e.deltaX)) e.currentTarget.scrollLeft += e.deltaY;
           }}
         >
-          <OwnerFilter label="All" count={all.length} on={owner === ALL_OWNERS} onClick={() => setOwner(ALL_OWNERS)} />
+          <OwnerFilter label="All" count={(repos ?? []).length} on={owner === ALL_OWNERS} onClick={() => setOwner(ALL_OWNERS)} />
           {owners.map((o) => (
             <OwnerFilter
               key={o.owner}
@@ -153,7 +163,7 @@ export function RepoPopover({
       )}
 
       <div ref={list} id="repo-options" className="min-h-0 flex-1 overflow-y-auto px-1 pt-0.5 pb-1" role="listbox" aria-multiselectable>
-        {repos == null && !reposError && (
+        {all.length === 0 && (repos == null || pages.loading) && !reposError && (
           <div role="group" aria-label="Loading">
             <SectionTitle title="Repos" />
             {[[120, 150], [150, 110], [96, 170], [132, 90]].map(([name, meta], i) => (
@@ -181,9 +191,9 @@ export function RepoPopover({
             <div className="pb-1.5 pl-[34px] pr-2 pt-1 text-[11.5px] text-faint">Not in your repos: cloned for this workspace.</div>
           </>
         )}
-        {repos != null && options.length === 0 && (
+        {repos != null && options.length === 0 && !pages.loading && !githubError && (
           <div className="px-2 pt-3.5 pb-3 text-center">
-            <div className="text-[12.5px] text-muted">{filter.trim() ? `No repo matches “${filter.trim()}”.` : "No repo to pick yet."}</div>
+            <div className="text-[12.5px] text-muted">{filter.trim() ? `No ${owner ? "" : "loaded "}repo matches “${filter.trim()}”.` : "No repo to pick yet."}</div>
             <div className="mt-0.5 text-[11.5px] text-faint">
               Paste its GitHub URL, or{" "}
               <button type="button" className="text-muted underline hover:text-fg" onClick={() => void openExternal(GITHUB_ACCESS_URL)}>
@@ -195,7 +205,7 @@ export function RepoPopover({
         )}
         {sections.map((section) => (
           <div key={section.id} role="group" aria-label={section.title}>
-            <SectionTitle title={section.title} count={section.count} />
+            <SectionTitle title={section.title} count={section.count ? `${section.count} loaded` : null} />
             {section.repos.map((repo) => {
               const i = index++;
               return (
@@ -238,10 +248,23 @@ export function RepoPopover({
             <GitBranch size={11} /> {key} <span className="text-faint">(from a ticket)</span>
           </div>
         ))}
+        {pages.nextCursor && (
+          <div className="flex justify-center py-2">
+            <Button size="sm" onClick={pages.loadMore} busy={pages.loading} disabled={!!pages.error} data-testid="repos-load-more">Load more repos</Button>
+          </div>
+        )}
       </div>
 
+      {!owner && filter.trim() && !pasted && (
+        <div className="border-t border-line px-2.5 py-2 text-[11.5px] text-muted" data-testid="repos-search-scope">
+          Showing loaded matches. Choose an owner above to search all its repos on GitHub.
+        </div>
+      )}
+      {pages.truncated && (
+        <div className="border-t border-line px-2.5 py-2 text-[11.5px] text-muted">GitHub limits search results. Use a more specific search to find other repos.</div>
+      )}
       <div className="flex shrink-0 items-center gap-3 border-t border-line px-2.5 py-1.5 text-[11px] text-faint">
-        {sync.githubError ? null : repos == null && !reposError ? (
+        {githubError ? null : pages.loading || (repos == null && !reposError) ? (
           <span className="flex items-center gap-1.5">
             <Loader2 size={11} className="animate-spin" /> Listing your repos on GitHub…
           </span>
@@ -252,15 +275,13 @@ export function RepoPopover({
             <span className="flex items-center gap-1"><Kbd>⌫</Kbd> remove last</span>
           </>
         )}
-        <span className={cx("truncate", !sync.githubError && "ml-auto")}>
-          {sync.githubError ? (
-            <>
-              Run <span className="font-mono text-[10.5px] text-muted">gh auth login</span> in a terminal, then Retry.
-            </>
+        <span className={cx("truncate", !githubError && "ml-auto")}>
+          {githubError ? (
+            <span>Check GitHub access, then Retry.</span>
           ) : (
-            sync.refreshedAt && repos != null && (
+            refreshedAt && repos != null && (
               <span className="flex items-center gap-1" data-testid="repos-synced">
-                <RefreshCw size={10} /> Synced with GitHub {relativeTime(sync.refreshedAt)}
+                <RefreshCw size={10} /> Checked GitHub {relativeTime(refreshedAt)}
               </span>
             )
           )}
@@ -333,6 +354,7 @@ function OwnerFilter({ label, count, on, onClick, icon }: { label: string; count
       type="button"
       role="tab"
       aria-selected={on}
+      title={`${count} repos loaded`}
       onClick={onClick}
       className={cx(
         "inline-flex h-[22px] shrink-0 items-center gap-[5px] rounded-[5px] px-[7px] text-[11.5px] whitespace-nowrap",

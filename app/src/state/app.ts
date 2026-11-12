@@ -63,6 +63,7 @@ import { canStep, EMPTY_NAV, step, visit, type NavHistory } from "@/lib/navHisto
 import { neighbourOf, orderedWorkspaces } from "@/lib/workspaceOrder";
 import type { DesignOption } from "@/lib/designs";
 import type { LinkedTicket } from "@/lib/newWorkspace";
+import { mergeRepos } from "@/lib/repoPicker";
 import { DEFAULT_LAYOUT, defaultMain, LAYOUTS_KEY, parseLayouts, showView, type SplitLayout, type ViewId } from "@/lib/splitLayout";
 
 export { neighbourOf, orderedWorkspaces };
@@ -170,6 +171,8 @@ export type AppState = {
   keyboard: KeyboardSettings;
   repos: RepoInfo[] | null;
   reposError: string | null;
+  reposRevision: number;
+  reposSources: boolean;
   /** When GitHub last listed the repos, and why it could not the last time it was asked. */
   reposSync: { refreshedAt: string | null; githubError: string | null };
   /** The agents' model catalogs; null until listed. */
@@ -266,6 +269,8 @@ export const useApp = create<AppState>(() => ({
   keyboard: { vim_mode: false, bindings: {}, binding_errors: [] },
   repos: null,
   reposError: null,
+  reposRevision: 0,
+  reposSources: true,
   reposSync: { refreshedAt: null, githubError: null },
   models: null,
   modelsLoading: false,
@@ -1162,17 +1167,37 @@ export async function deleteChat(chatId: string, force: boolean): Promise<boolea
   }
 }
 
-export async function loadRepos(refresh = false) {
-  try {
-    const result = await client.call("repos.list", { refresh });
-    set({
-      repos: result.repos,
+const repoLoads = new Map<string, Promise<void>>();
+let repoLoadVersion = 0;
+
+export function loadRepos(refresh = false): Promise<void> {
+  return readRepos("repos.cached", refresh);
+}
+
+export function loadAllRepos(refresh = false): Promise<void> {
+  return readRepos("repos.list", refresh);
+}
+
+function readRepos(method: "repos.cached" | "repos.list", refresh: boolean): Promise<void> {
+  const existing = repoLoads.get(method);
+  if (existing && !refresh) return existing;
+  const version = ++repoLoadVersion;
+  const request = client.call(method, { refresh }).then((result) => {
+    if (version !== repoLoadVersion) return;
+    set((state) => ({
+      repos: refresh || method === "repos.list" ? result.repos : mergeRepos(result.repos, state.repos ?? []),
       reposError: null,
+      reposRevision: state.reposRevision + (refresh ? 1 : 0),
+      reposSources: result.github_sources ?? true,
       reposSync: { refreshedAt: result.refreshed_at ?? null, githubError: result.github_error ?? null },
-    });
-  } catch (error) {
-    set({ reposError: errorMessage(error) });
-  }
+    }));
+  }).catch((error: unknown) => {
+    if (version === repoLoadVersion) set({ reposError: errorMessage(error) });
+  }).finally(() => {
+    if (repoLoads.get(method) === request) repoLoads.delete(method);
+  });
+  repoLoads.set(method, request);
+  return request;
 }
 
 export async function loadModels(refresh = false) {

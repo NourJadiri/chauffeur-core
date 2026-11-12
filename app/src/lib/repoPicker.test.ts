@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { RepoInfo } from "@chauffeur/protocol";
-import { githubRepoRef, mainOwner, ownerAvatar, ownerFilters, repoSections, shortAge, showsOwner } from "./repoPicker";
+import { cachedPickerRepos, githubRepoRef, mainOwner, mergeRepos, ownerAvatar, ownerFilters, repoSections, shortAge, showsOwner } from "./repoPicker";
 
 const repo = (fullName: string, extra: Partial<RepoInfo> = {}): RepoInfo => {
   const [owner, name] = fullName.split("/");
@@ -101,4 +101,19 @@ test("ages and avatars", () => {
   expect(ownerAvatar("kanso-studio").initials).toBe("KS");
   expect(ownerAvatar("acme").initials).toBe("AC");
   expect(ownerAvatar("acme").color).toBe(ownerAvatar("acme").color);
+});
+
+test("a large cache stays bounded without hiding defaults, selected repos, recent work or local clones", () => {
+  const repos = Array.from({ length: 20_000 }, (_, index) => repo(`acme/repo-${index}`));
+  repos[19_999] = repo("acme/default", { is_default: true });
+  repos[19_998] = repo("acme/selected");
+  repos[19_997] = repo("acme/recent", { last_used: "2026-11-12T12:00:00Z" });
+  repos.push(notes);
+  const visible = cachedPickerRepos(repos, ["selected"]);
+  expect(visible).toHaveLength(54);
+  expect(visible.map((entry) => entry.key)).toEqual(expect.arrayContaining(["default", "selected", "recent", notes.key]));
+  const updated = { ...visible[0], description: "Updated" };
+  const merged = mergeRepos(visible, [updated]);
+  expect(merged).toHaveLength(54);
+  expect(merged[0].description).toBe("Updated");
 });

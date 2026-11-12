@@ -20,6 +20,8 @@ use crate::shellenv::ShellEnv;
 use crate::store::{CachedRepo, Store};
 use crate::{Error, Result};
 
+mod picker;
+
 const REFRESHED_AT: &str = "repos_refreshed_at";
 /// What the cache was listed for (the main organization, every owner or not): another setting
 /// lists again.
@@ -34,6 +36,7 @@ pub struct RepoRegistry {
     locks: std::sync::Mutex<HashMap<PathBuf, Arc<Mutex<()>>>>,
     /// Why GitHub last failed to list the repos, until a listing succeeds.
     github_error: std::sync::Mutex<Option<String>>,
+    picker: picker::Picker,
 }
 
 /// The pickable repos, with how their GitHub listing went.
@@ -65,6 +68,7 @@ impl RepoRegistry {
             store,
             locks: Default::default(),
             github_error: Default::default(),
+            picker: Default::default(),
         }
     }
 
@@ -87,7 +91,7 @@ impl RepoRegistry {
     pub async fn listing(&self, refresh: bool, env: &ShellEnv) -> Result<RepoListing> {
         let settings = self.settings.get();
         let main = settings.github_org.as_str();
-        let mut cached = self.cached(&settings)?;
+        let cached = self.cached(&settings)?;
         let stale = self
             .store
             .kv_get(REFRESHED_AT)?
@@ -105,7 +109,7 @@ impl RepoRegistry {
                     self.store.replace_repos_cache(&repos)?;
                     self.store.kv_set(REFRESHED_AT, &crate::store::now())?;
                     self.store.kv_set(LISTED_FOR, &listed_for)?;
-                    cached = self.cached(&settings)?;
+                    self.picker.clear();
                     *self.github_error.lock().unwrap() = None;
                 }
                 Err(error) => {
@@ -116,38 +120,26 @@ impl RepoRegistry {
         } else if !listed {
             *self.github_error.lock().unwrap() = None;
         }
+        self.cached_listing()
+    }
+
+    pub fn cached_listing(&self) -> Result<RepoListing> {
+        let settings = self.settings.get();
+        let cached = self.cached(&settings)?;
+        self.listing_from(cached, &settings)
+    }
+
+    fn listing_from(
+        &self,
+        cached: Vec<CachedRepo>,
+        settings: &UserSettings,
+    ) -> Result<RepoListing> {
+        let listed = !settings.github_org.is_empty() || settings.github_sources;
         let last_use = self.store.last_use_by_clone()?;
         let mut by_key: BTreeMap<String, RepoInfo> = BTreeMap::new();
         for repo in cached {
-            let owner = repo.owner().to_string();
-            let main_owned = is_main(&settings, &owner);
-            let key = if main_owned {
-                repo.name.clone()
-            } else {
-                repo.full_name.clone()
-            };
-            let clone_path = if main_owned {
-                self.find_clone(&repo.name)
-            } else {
-                self.find_owned_clone(&owner, &repo.name)
-            };
-            let info = RepoInfo {
-                is_default: settings.default_repos.contains(&key)
-                    || settings.default_repos.contains(&repo.full_name),
-                key: key.clone(),
-                clone_path: clone_path.map(display),
-                owner,
-                owner_is_org: repo.owner_is_org,
-                private: repo.private,
-                local: false,
-                name: repo.name,
-                full_name: repo.full_name,
-                default_branch: repo.default_branch,
-                description: repo.description,
-                pushed_at: repo.pushed_at,
-                last_used: None,
-            };
-            by_key.insert(key, info);
+            let info = self.repo_info(repo, settings);
+            by_key.insert(info.key.clone(), info);
         }
         // The clones no owner lists: a repo of nowhere, or of an owner the account does not reach.
         // A folder named like another owner's repo is still shown when it is not its clone.
@@ -212,6 +204,21 @@ impl RepoRegistry {
                 entry.default_branch = over.default_branch.clone();
             }
         }
+        for key in &settings.default_repos {
+            let Ok((owner, name)) = parse_repo_ref(key) else {
+                continue;
+            };
+            let owner = owner.unwrap_or(&settings.github_org);
+            let info = self.repo_info(
+                CachedRepo {
+                    name: name.to_string(),
+                    full_name: format!("{owner}/{name}"),
+                    ..Default::default()
+                },
+                settings,
+            );
+            by_key.entry(info.key.clone()).or_insert(info);
+        }
         let mut repos: Vec<RepoInfo> = by_key.into_values().collect();
         for repo in &mut repos {
             repo.last_used = repo
@@ -243,12 +250,48 @@ impl RepoRegistry {
 
     /// The cached GitHub repos the settings show: every owner's, or the main organization's only.
     fn cached(&self, settings: &UserSettings) -> Result<Vec<CachedRepo>> {
-        Ok(self
+        let mut repos: HashMap<String, CachedRepo> = self
             .store
             .repos_cache()?
             .into_iter()
+            .map(|repo| (repo.full_name.to_lowercase(), repo))
+            .collect();
+        repos.extend(self.picker.known(settings));
+        Ok(repos
+            .into_values()
             .filter(|repo| is_main(settings, repo.owner()) || settings.github_sources)
             .collect())
+    }
+
+    fn repo_info(&self, repo: CachedRepo, settings: &UserSettings) -> RepoInfo {
+        let owner = repo.owner().to_string();
+        let main_owned = is_main(settings, &owner);
+        let key = if main_owned || owner.is_empty() {
+            repo.name.clone()
+        } else {
+            repo.full_name.clone()
+        };
+        let clone_path = if main_owned || owner.is_empty() {
+            self.find_clone(&repo.name)
+        } else {
+            self.find_owned_clone(&owner, &repo.name)
+        };
+        RepoInfo {
+            is_default: settings.default_repos.contains(&key)
+                || settings.default_repos.contains(&repo.full_name),
+            key,
+            clone_path: clone_path.map(display),
+            owner,
+            owner_is_org: repo.owner_is_org,
+            private: repo.private,
+            local: false,
+            name: repo.name,
+            full_name: repo.full_name,
+            default_branch: repo.default_branch,
+            description: repo.description,
+            pushed_at: repo.pushed_at,
+            last_used: None,
+        }
     }
 
     /// Names of every repo known from the main organization's cache and the settings.
@@ -342,16 +385,19 @@ impl RepoRegistry {
     ) -> Result<ResolvedRepo> {
         let (owner, name) = parse_repo_ref(reference)?;
         let settings = self.settings.get();
-        let mut cache = self.store.repos_cache()?;
+        let default_in_main = !settings.github_org.is_empty()
+            && settings.default_repos.iter().any(|repo| repo == name);
+        let mut cache = self.cached(&settings)?;
         if owner.is_none()
             && !cache.iter().any(|repo| repo.name == name)
             && !settings.repos.contains_key(name)
+            && !default_in_main
             && self.find_clone(name).is_none()
         {
             // A name nothing local knows: list GitHub first when the cache is empty (a fresh
             // install, or the one an upgrade emptied) or stale, as the picker would.
             self.list(false, env).await?;
-            cache = self.store.repos_cache()?;
+            cache = self.cached(&settings)?;
         }
         let owner = match owner.filter(|owner| !is_main(&settings, owner)) {
             Some(owner) => Some(owner.to_string()),
@@ -359,7 +405,12 @@ impl RepoRegistry {
                 let in_main = cache
                     .iter()
                     .any(|repo| repo.name == name && is_main(&settings, repo.owner()));
-                if in_main || settings.repos.contains_key(name) || self.find_clone(name).is_some() {
+                if in_main
+                    || owner.is_some()
+                    || settings.repos.contains_key(name)
+                    || default_in_main
+                    || self.find_clone(name).is_some()
+                {
                     None
                 } else {
                     // A short name that neither the main organization, the settings nor a clone
@@ -634,6 +685,7 @@ async fn gh_output(args: &[&str], env: &ShellEnv) -> anyhow::Result<Vec<u8>> {
         .args(args)
         .env_clear()
         .envs(env.vars())
+        .kill_on_drop(true)
         .output()
         .await
         .with_context(|| format!("running gh {}", args[..2].join(" ")))?;

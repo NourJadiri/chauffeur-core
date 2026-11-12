@@ -337,6 +337,14 @@ methods! {
         #[access(Any)]
         #[relay(Local)]
         ReposList(ReposListParams) -> ReposListResult,
+        #[serde(rename = "repos.cached")]
+        #[access(Any)]
+        #[relay(Local)]
+        ReposCached(ReposListParams) -> ReposListResult,
+        #[serde(rename = "repos.page")]
+        #[access(Any)]
+        #[relay(Local)]
+        ReposPage(ReposPageParams) -> ReposPageResult,
         #[serde(rename = "workspace.create")]
         #[access(Any)]
         #[relay(Local)]
@@ -1397,6 +1405,36 @@ pub struct ReposListResult {
     pub refreshed_at: Option<String>,
     /// Why GitHub could not list them the last time it was asked: `repos` then holds the cached
     /// ones and the clones found on this machine.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub github_error: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub github_sources: Option<bool>,
+}
+
+#[derive(Serialize, Deserialize, TS, Clone, Debug, Default)]
+#[ts(export)]
+#[ts(optional_fields)]
+pub struct ReposPageParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner: Option<String>,
+    #[serde(default)]
+    pub query: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<String>,
+    #[serde(default)]
+    pub refresh: bool,
+}
+
+#[derive(Serialize, Deserialize, TS, Clone, Debug)]
+#[ts(export)]
+#[ts(optional_fields)]
+pub struct ReposPageResult {
+    pub repos: Vec<RepoInfo>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<String>,
+    pub truncated: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refreshed_at: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub github_error: Option<String>,
 }

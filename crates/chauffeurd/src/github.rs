@@ -195,6 +195,7 @@ impl Github {
     /// The account changed: read it again on the next ask, the branch prefix's login too.
     async fn forget_account(&self) {
         *self.account.lock().await = None;
+        self.d().repos.clear_picker();
         if let Err(error) = self.d().store.kv_delete(LOGIN_KEY) {
             tracing::warn!(%error, "could not forget the github login");
         }

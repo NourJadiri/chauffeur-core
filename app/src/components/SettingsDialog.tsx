@@ -28,7 +28,7 @@ import {
   client,
   loadLoadout,
   loadModels,
-  loadRepos,
+  loadAllRepos,
   openSettings,
   playNotificationSound,
   setAppearance,
@@ -120,7 +120,7 @@ export function SettingsDialog() {
       setNotificationSound(next.notifications.sound);
       setKeyboard(next.keyboard);
       // The create dialog's preselected repos.
-      if (change.workspaces) await loadRepos();
+      if (change.workspaces) await loadAllRepos();
       return true;
     } catch (err) {
       setError(errorMessage(err));
@@ -301,8 +301,8 @@ function Workspaces({ settings, update, busy }: SectionProps) {
   const reposError = useApp((s) => s.reposError);
   const repos = useApp((s) => s.repos);
   useEffect(() => {
-    if (!repos) void loadRepos();
-  }, [repos]);
+    void loadAllRepos();
+  }, []);
   const { default_repos, branch_prefix, github_login, clone_roots } = settings.workspaces;
   const w = settings.workspaces;
   const [org, setOrg] = useState(w.github_org);
@@ -330,7 +330,7 @@ function Workspaces({ settings, update, busy }: SectionProps) {
           testId="default-repos"
         />
       </Field>
-      <RepoOrder repos={repos} order={w.repo_order} busy={busy} error={reposError} onRefresh={() => loadRepos(true)}
+      <RepoOrder repos={repos} order={w.repo_order} busy={busy} error={reposError} onRefresh={() => loadAllRepos(true)}
         onSave={(repo_order) => void update({ workspaces: { repo_order } })} />
       <Field label="Branch prefix" hint={<span className="font-mono">{example}</span>}>
         <input
@@ -374,7 +374,7 @@ function Workspaces({ settings, update, busy }: SectionProps) {
         hint="Your own, your other organizations' and the ones you collaborate on, beside the main organization's."
         on={w.github_sources}
         disabled={busy}
-        onChange={(on) => void update({ workspaces: { github_sources: on } }).then(() => loadRepos(true))}
+        onChange={(on) => void update({ workspaces: { github_sources: on } }).then(() => loadAllRepos(true))}
         testId="github-sources"
       />
       <Field label="Repos elsewhere" hint="a clone outside these folders, or another default branch">
