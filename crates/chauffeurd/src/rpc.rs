@@ -166,9 +166,25 @@ async fn handle_other(daemon: &Arc<Daemon>, call: ClientCall) -> Result<Value> {
                 .await?;
             to_value(ReposListResult {
                 repos: listing.repos,
+                github_sources: Some(daemon.settings.get().github_sources),
                 refreshed_at: listing.refreshed_at,
                 github_error: listing.github_error,
             })
+        }
+        ClientCall::ReposCached(params) => {
+            if params.refresh {
+                daemon.repos.clear_picker();
+            }
+            let listing = daemon.repos.picker_listing()?;
+            to_value(ReposListResult {
+                repos: listing.repos,
+                github_sources: Some(daemon.settings.get().github_sources),
+                refreshed_at: listing.refreshed_at,
+                github_error: listing.github_error,
+            })
+        }
+        ClientCall::ReposPage(params) => {
+            to_value(daemon.repos.page(params, &daemon.shell_env).await?)
         }
         ClientCall::WorkspaceCreate(params) => to_value(daemon.workspaces.create(params).await?),
         ClientCall::WorkspaceList(params) => to_value(WorkspacesResult {
@@ -1022,6 +1038,9 @@ fn handle_routine(
 }
 
 async fn keep_known_repos(daemon: &Arc<Daemon>, repos: &mut Vec<String>) -> Result<()> {
+    if repos.is_empty() {
+        return Ok(());
+    }
     let known = daemon.repos.known_names_loaded(&daemon.shell_env).await?;
     if !known.is_empty() {
         repos.retain(|repo| known.contains(repo));

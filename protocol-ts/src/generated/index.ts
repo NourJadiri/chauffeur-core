@@ -414,6 +414,8 @@ export type { RepoLeftovers } from "./RepoLeftovers";
 export type { RepoSetting } from "./RepoSetting";
 export type { ReposListParams } from "./ReposListParams";
 export type { ReposListResult } from "./ReposListResult";
+export type { ReposPageParams } from "./ReposPageParams";
+export type { ReposPageResult } from "./ReposPageResult";
 export type { RequestAgent } from "./RequestAgent";
 export type { RequestResponse } from "./RequestResponse";
 export type { ResetCredit } from "./ResetCredit";
