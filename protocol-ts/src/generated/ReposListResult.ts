@@ -10,4 +10,4 @@ refreshed_at?: string,
  * Why GitHub could not list them the last time it was asked: `repos` then holds the cached
  * ones and the clones found on this machine.
  */
-github_error?: string, };
+github_error?: string, github_sources?: boolean, };

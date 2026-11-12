@@ -245,6 +245,8 @@ import type { RenameTerminalParams } from "./RenameTerminalParams";
 import type { RenameWorkspaceParams } from "./RenameWorkspaceParams";
 import type { ReposListParams } from "./ReposListParams";
 import type { ReposListResult } from "./ReposListResult";
+import type { ReposPageParams } from "./ReposPageParams";
+import type { ReposPageResult } from "./ReposPageResult";
 import type { ResizeTerminalParams } from "./ResizeTerminalParams";
 import type { RespondParams } from "./RespondParams";
 import type { RetitleWorkspaceParams } from "./RetitleWorkspaceParams";
@@ -354,7 +356,7 @@ import type { WorktreeCreateParams } from "./WorktreeCreateParams";
 import type { WorktreeCreateResult } from "./WorktreeCreateResult";
 import type { WorktreeRemoveParams } from "./WorktreeRemoveParams";
 
-export const PROTOCOL_VERSION = 15;
+export const PROTOCOL_VERSION = 16;
 export const MIN_PROTOCOL_VERSION = 1;
 export const PEER_PROTOCOL_VERSION = 3;
 
@@ -428,6 +430,8 @@ export type ClientMethods = {
   "worker.login_cancel": [WorkerLoginParams, null];
   "worker.usage": [WorkerParams, UsageResult];
   "repos.list": [ReposListParams, ReposListResult];
+  "repos.cached": [ReposListParams, ReposListResult];
+  "repos.page": [ReposPageParams, ReposPageResult];
   "workspace.create": [CreateWorkspaceParams, CreateWorkspaceResult];
   "workspace.list": [ListWorkspacesParams, WorkspacesResult];
   "workspace.search_archived": [SearchArchivedParams, ArchivedSearchResult];
@@ -803,6 +807,8 @@ export const METHOD_NAMES = [
   "worker.login_cancel",
   "worker.usage",
   "repos.list",
+  "repos.cached",
+  "repos.page",
   "workspace.create",
   "workspace.list",
   "workspace.search_archived",
