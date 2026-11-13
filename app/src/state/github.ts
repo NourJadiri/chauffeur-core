@@ -46,3 +46,7 @@ export function useGithubStatus(): { status: GithubStatus | null; error: string 
 export function useGithubAccount(): string | null {
   return useGithub((s) => s.status?.account ?? null);
 }
+
+export function useGithubSource(): GithubStatus | null {
+  return useGithub((s) => s.status);
+}

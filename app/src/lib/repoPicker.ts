@@ -8,6 +8,23 @@ import type { RepoInfo } from "@chauffeur/protocol";
 export const RECENT_MAX = 4;
 /** The owner filter that shows every owner. */
 export const ALL_OWNERS = "";
+
+export function mergeRepos(...lists: RepoInfo[][]): RepoInfo[] {
+  const repos = new Map<string, RepoInfo>();
+  for (const list of lists) {
+    for (const repo of list) repos.set(repo.key.toLowerCase(), repo);
+  }
+  return [...repos.values()];
+}
+
+export function cachedPickerRepos(repos: RepoInfo[], selected: string[]): RepoInfo[] {
+  const recent = new Set(repos
+    .filter((repo) => repo.last_used)
+    .sort((a, b) => (b.last_used ?? "").localeCompare(a.last_used ?? ""))
+    .slice(0, RECENT_MAX)
+    .map((repo) => repo.key));
+  return repos.filter((repo, index) => index < 50 || repo.local || repo.is_default || selected.includes(repo.key) || recent.has(repo.key));
+}
 /** GitHub CLI's OAuth app on GitHub: where its access to each organization (SSO included) is
  *  granted. */
 export const GITHUB_ACCESS_URL = "https://github.com/settings/connections/applications/178c6fc778ccc68e1d6a";

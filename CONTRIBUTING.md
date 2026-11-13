@@ -42,6 +42,10 @@ is stale.
 Read [CODING_STANDARDS.md](CODING_STANDARDS.md) before writing code; reviews use it. A change of
 behaviour comes with the test that fails without it.
 
+The large-organization repo picker integration tests run with
+`cargo test -p chauffeurd --test repo_picker`: a fake GitHub boundary supplies 20,000 repos,
+while the daemon, RPC dispatch, Git clones and workspace creation are real and isolated.
+
 ## Commits and pull requests
 
 - Commit messages read `type(scope): subject`, such as `feat(cloud): …` or `fix(chat): …`.
