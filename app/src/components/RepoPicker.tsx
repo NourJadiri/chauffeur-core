@@ -1,24 +1,17 @@
 import type { RepoInfo } from "@chauffeur/protocol";
 import { Check, Folder, GitBranch, Loader2, Lock, RefreshCw, Search } from "lucide-react";
-import { type ReactNode, type RefObject, useEffect, useRef, useState } from "react";
+import type { ReactNode, RefObject } from "react";
 import { relativeTime } from "@/lib/format";
 import { openExternal } from "@/lib/native";
 import {
   ALL_OWNERS,
-  cachedPickerRepos,
   GITHUB_ACCESS_URL,
-  githubRepoRef,
-  mergeRepos,
   ownerAvatar,
-  ownerFilters,
-  repoSections,
   shortAge,
   showsOwner,
 } from "@/lib/repoPicker";
-import { useApp } from "@/state/app";
-import { useGithubAccount, useGithubSource } from "@/state/github";
 import { Button, cx, Kbd, Popover } from "./ui";
-import { useRepoPages } from "./useRepoPages";
+import { useRepoPicker } from "./useRepoPicker";
 
 const WIDTH = 470;
 
@@ -41,53 +34,10 @@ export function RepoPopover({
   selection: string[];
   onToggle: (repo: string) => void;
 }) {
-  const repos = useApp((s) => s.repos);
-  const reposError = useApp((s) => s.reposError);
-  const sync = useApp((s) => s.reposSync);
-  const sources = useApp((s) => s.reposSources);
-  const account = useGithubAccount();
-  const source = useGithubSource();
-  const [filter, setFilter] = useState("");
-  const [owner, setOwner] = useState(ALL_OWNERS);
-  const [active, setActive] = useState(0);
-  const list = useRef<HTMLDivElement>(null);
-  const cached = !owner && filter.trim() ? repos ?? [] : cachedPickerRepos(repos ?? [], selection);
-
-  // A pasted URL searches for its repo; one no owner lists is offered as is.
-  const pasted = githubRepoRef(filter);
-  const pages = useRepoPages(owner, owner ? filter.trim() : "", `${account}/${source?.organization ?? ""}`, !pasted && (!!owner || !filter.trim()));
-  const all = mergeRepos(cached, pages.repos);
-  const refreshing = pages.loading;
-  const githubError = pages.error ?? (pages.refreshedAt ? null : sync.githubError);
-  const refreshedAt = pages.refreshedAt ?? sync.refreshedAt;
-  const listed = pasted
-    ? all.find((r) => r.key.toLowerCase() === pasted.toLowerCase() || r.full_name.toLowerCase() === pasted.toLowerCase())
-    : undefined;
-  const query = pasted ?? filter;
-  const offered = pasted && !listed && filter.trim().includes("/") ? pasted : null;
-  const sections = repoSections(all, { owner: offered ? ALL_OWNERS : owner, query, account, selected: selection });
-  const options = [...(offered ? [offered] : []), ...sections.flatMap((s) => s.repos.map((r) => r.key))];
-  const owners = ownerFilters(repos ?? [], account);
-  for (const login of [source?.organization, ...(sources ? [account, ...(source?.organizations ?? [])] : [])]) {
-    if (login && !owners.some((candidate) => candidate.owner.toLowerCase() === login.toLowerCase())) {
-      owners.push({ owner: login, count: 0 });
-    }
-  }
-  const ring = Math.min(active, Math.max(0, options.length - 1));
-
-  // Typing, or another owner, puts the ring back on the first result.
-  useEffect(() => setActive(0), [filter, owner]);
-  useEffect(() => {
-    list.current?.querySelector(`[data-option="${ring}"]`)?.scrollIntoView({ block: "nearest" });
-  }, [ring]);
-
-  const refresh = () => pages.refresh();
-  const pick = (key: string) => {
-    onToggle(key);
-    if (filter) setFilter("");
-  };
-  const unknown = selection.filter((key) => !all.some((r) => r.key === key) && !key.includes("/"));
-  let index = offered ? 1 : 0;
+  const { filter, setFilter, owner, setOwner, view, navigation, pages, status, pick, onKeyDown, showScopeHint, catalogCount } = useRepoPicker(selection, onToggle);
+  const { repos, query, offered, sections, options, owners, unknown } = view;
+  const { listRef, active, onHover } = navigation;
+  const { catalogError, githubError, refreshedAt } = status;
 
   return (
     <Popover anchor={anchor} width={WIDTH} height={420} onClose={onClose} testId="repo-popover">
@@ -99,25 +49,13 @@ export function RepoPopover({
           placeholder="Filter repos, or paste a GitHub URL…"
           value={filter}
           onChange={(e) => setFilter(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.metaKey || e.ctrlKey) return;
-            if (e.key === "ArrowDown" || e.key === "ArrowUp") {
-              e.preventDefault();
-              const step = e.key === "ArrowDown" ? 1 : -1;
-              setActive(Math.max(0, Math.min(options.length - 1, ring + step)));
-            } else if (e.key === "Enter" && options.length > 0) {
-              e.preventDefault();
-              pick(options[ring]);
-            } else if (e.key === "Backspace" && !filter && selection.length > 0) {
-              onToggle(selection[selection.length - 1]);
-            }
-          }}
+          onKeyDown={onKeyDown}
           aria-controls="repo-options"
-          aria-activedescendant={options.length > 0 ? `repo-option-${ring}` : undefined}
+          aria-activedescendant={options.length > 0 ? `repo-option-${active}` : undefined}
           data-testid="repo-filter"
         />
-        <button type="button" title="Refresh from GitHub" aria-label="Refresh from GitHub" disabled={refreshing || !!pasted || (!owner && !!filter.trim())} className="shrink-0 text-faint hover:text-fg disabled:opacity-40" onClick={refresh}>
-          <RefreshCw size={12} className={refreshing ? "animate-spin" : ""} />
+        <button type="button" title="Refresh from GitHub" aria-label="Refresh from GitHub" disabled={status.refreshDisabled} className="shrink-0 text-faint hover:text-fg disabled:opacity-40" onClick={pages.refresh}>
+          <RefreshCw size={12} className={pages.loading ? "animate-spin" : ""} />
         </button>
       </div>
 
@@ -132,8 +70,8 @@ export function RepoPopover({
               {githubError}
             </div>
           </div>
-          <Button size="sm" className="shrink-0" onClick={pages.retry} busy={refreshing}>
-            {!refreshing && <RefreshCw size={11} />} Retry
+          <Button size="sm" className="shrink-0" onClick={pages.retry} busy={pages.loading}>
+            {!pages.loading && <RefreshCw size={11} />} Retry
           </Button>
         </div>
       )}
@@ -148,7 +86,7 @@ export function RepoPopover({
             if (Math.abs(e.deltaY) > Math.abs(e.deltaX)) e.currentTarget.scrollLeft += e.deltaY;
           }}
         >
-          <OwnerFilter label="All" count={(repos ?? []).length} on={owner === ALL_OWNERS} onClick={() => setOwner(ALL_OWNERS)} />
+          <OwnerFilter label="All" count={catalogCount} on={owner === ALL_OWNERS} onClick={() => setOwner(ALL_OWNERS)} />
           {owners.map((o) => (
             <OwnerFilter
               key={o.owner}
@@ -156,14 +94,14 @@ export function RepoPopover({
               count={o.count}
               on={owner === o.owner}
               onClick={() => setOwner(o.owner)}
-              icon={<OwnerAvatar owner={o.owner} org={all.find((r) => r.owner === o.owner)?.owner_is_org ?? true} size={14} />}
+              icon={<OwnerAvatar owner={o.owner} org={repos.find((r) => r.owner === o.owner)?.owner_is_org ?? true} size={14} />}
             />
           ))}
         </div>
       )}
 
-      <div ref={list} id="repo-options" className="min-h-0 flex-1 overflow-y-auto px-1 pt-0.5 pb-1" role="listbox" aria-multiselectable>
-        {all.length === 0 && (repos == null || pages.loading) && !reposError && (
+      <div ref={listRef} id="repo-options" className="min-h-0 flex-1 overflow-y-auto px-1 pt-0.5 pb-1" role="listbox" aria-multiselectable>
+        {status.showSkeleton && (
           <div role="group" aria-label="Loading">
             <SectionTitle title="Repos" />
             {[[120, 150], [150, 110], [96, 170], [132, 90]].map(([name, meta], i) => (
@@ -175,10 +113,10 @@ export function RepoPopover({
             ))}
           </div>
         )}
-        {reposError && <div className="px-2 py-1.5 text-[12px] text-danger">Could not list repos: {reposError}</div>}
+        {catalogError && <div className="px-2 py-1.5 text-[12px] text-danger">Could not list repos: {catalogError}</div>}
         {offered && (
           <>
-            <Row index={0} active={ring === 0} onHover={setActive} onPick={() => pick(offered)} selected={selection.includes(offered)}>
+            <Row index={0} active={active === 0} onHover={onHover} onPick={() => pick(offered)} selected={selection.includes(offered)}>
               <span className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-fg text-bg">
                 <GithubMark size={10} />
               </span>
@@ -191,7 +129,7 @@ export function RepoPopover({
             <div className="pb-1.5 pl-[34px] pr-2 pt-1 text-[11.5px] text-faint">Not in your repos: cloned for this workspace.</div>
           </>
         )}
-        {repos != null && options.length === 0 && !pages.loading && !githubError && (
+        {status.showEmpty && (
           <div className="px-2 pt-3.5 pb-3 text-center">
             <div className="text-[12.5px] text-muted">{filter.trim() ? `No ${owner ? "" : "loaded "}repo matches “${filter.trim()}”.` : "No repo to pick yet."}</div>
             <div className="mt-0.5 text-[11.5px] text-faint">
@@ -206,13 +144,13 @@ export function RepoPopover({
         {sections.map((section) => (
           <div key={section.id} role="group" aria-label={section.title}>
             <SectionTitle title={section.title} count={section.count ? `${section.count} loaded` : null} />
-            {section.repos.map((repo) => {
-              const i = index++;
+            {section.repos.map((repo, index) => {
+              const i = section.start + index;
               return (
-                <Row key={repo.key} index={i} active={ring === i} onHover={setActive} onPick={() => pick(repo.key)} selected={selection.includes(repo.key)} repo={repo.key}>
+                <Row key={repo.key} index={i} active={active === i} onHover={onHover} onPick={() => pick(repo.key)} selected={selection.includes(repo.key)} repo={repo.key}>
                   <RepoAvatar repo={repo} />
                   <span className="shrink-0 whitespace-nowrap text-fg">
-                    {!section.owner && showsOwner(repo, all) && <span className="text-faint">{repo.owner}/</span>}
+                    {!section.owner && showsOwner(repo, repos) && <span className="text-faint">{repo.owner}/</span>}
                     <Highlight text={repo.name} query={query} />
                   </span>
                   {repo.private && (
@@ -255,7 +193,7 @@ export function RepoPopover({
         )}
       </div>
 
-      {!owner && filter.trim() && !pasted && (
+      {showScopeHint && (
         <div className="border-t border-line px-2.5 py-2 text-[11.5px] text-muted" data-testid="repos-search-scope">
           Showing loaded matches. Choose an owner above to search all its repos on GitHub.
         </div>
@@ -264,7 +202,7 @@ export function RepoPopover({
         <div className="border-t border-line px-2.5 py-2 text-[11.5px] text-muted">GitHub limits search results. Use a more specific search to find other repos.</div>
       )}
       <div className="flex shrink-0 items-center gap-3 border-t border-line px-2.5 py-1.5 text-[11px] text-faint">
-        {githubError ? null : pages.loading || (repos == null && !reposError) ? (
+        {githubError ? null : status.loading ? (
           <span className="flex items-center gap-1.5">
             <Loader2 size={11} className="animate-spin" /> Listing your repos on GitHub…
           </span>
@@ -279,7 +217,7 @@ export function RepoPopover({
           {githubError ? (
             <span>Check GitHub access, then Retry.</span>
           ) : (
-            refreshedAt && repos != null && (
+            refreshedAt && status.checked && (
               <span className="flex items-center gap-1" data-testid="repos-synced">
                 <RefreshCw size={10} /> Checked GitHub {relativeTime(refreshedAt)}
               </span>

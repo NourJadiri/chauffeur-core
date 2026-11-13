@@ -8,23 +8,7 @@ import type { RepoInfo } from "@chauffeur/protocol";
 export const RECENT_MAX = 4;
 /** The owner filter that shows every owner. */
 export const ALL_OWNERS = "";
-
-export function mergeRepos(...lists: RepoInfo[][]): RepoInfo[] {
-  const repos = new Map<string, RepoInfo>();
-  for (const list of lists) {
-    for (const repo of list) repos.set(repo.key.toLowerCase(), repo);
-  }
-  return [...repos.values()];
-}
-
-export function cachedPickerRepos(repos: RepoInfo[], selected: string[]): RepoInfo[] {
-  const recent = new Set(repos
-    .filter((repo) => repo.last_used)
-    .sort((a, b) => (b.last_used ?? "").localeCompare(a.last_used ?? ""))
-    .slice(0, RECENT_MAX)
-    .map((repo) => repo.key));
-  return repos.filter((repo, index) => index < 50 || repo.local || repo.is_default || selected.includes(repo.key) || recent.has(repo.key));
-}
+const CACHED_ROWS = 50;
 /** GitHub CLI's OAuth app on GitHub: where its access to each organization (SSO included) is
  *  granted. */
 export const GITHUB_ACCESS_URL = "https://github.com/settings/connections/applications/178c6fc778ccc68e1d6a";
@@ -137,6 +121,69 @@ export function githubRepoRef(text: string): string | null {
   const name = url[2].replace(/\.git$/i, "");
   if (!/^[A-Za-z0-9](?:[A-Za-z0-9-]*)$/.test(owner) || !/^[A-Za-z0-9_.-]+$/.test(name) || name.startsWith(".")) return null;
   return `${owner}/${name}`;
+}
+
+export function mergeRepos(...lists: RepoInfo[][]): RepoInfo[] {
+  const repos = new Map<string, RepoInfo>();
+  for (const list of lists) {
+    for (const repo of list) repos.set(repo.key.toLowerCase(), repo);
+  }
+  return [...repos.values()];
+}
+
+export function cachedPickerRepos(repos: RepoInfo[], selected: string[]): RepoInfo[] {
+  const recent = new Set(repos
+    .filter((repo) => repo.last_used)
+    .sort((a, b) => (b.last_used ?? "").localeCompare(a.last_used ?? ""))
+    .slice(0, RECENT_MAX)
+    .map((repo) => repo.key));
+  return repos.filter((repo, index) => index < CACHED_ROWS || repo.local || repo.is_default || selected.includes(repo.key) || recent.has(repo.key));
+}
+
+export function repoPickerSearch(owner: string, filter: string) {
+  const pasted = githubRepoRef(filter);
+  return {
+    owner,
+    filter,
+    pasted,
+    query: pasted ?? filter,
+    remoteQuery: owner ? filter.trim() : "",
+    remoteEnabled: !pasted && (!!owner || !filter.trim()),
+    showScopeHint: !owner && !!filter.trim() && !pasted,
+  };
+}
+
+export function repoPickerView({
+  repos, pages, selected, search, account, knownOwners,
+}: {
+  repos: RepoInfo[];
+  pages: RepoInfo[];
+  selected: string[];
+  search: ReturnType<typeof repoPickerSearch>;
+  account: string | null;
+  knownOwners: string[];
+}) {
+  const cached = !search.owner && search.filter.trim() ? repos : cachedPickerRepos(repos, selected);
+  const all = mergeRepos(cached, pages);
+  const pastedKey = search.pasted?.toLowerCase();
+  const listed = pastedKey && all.some((repo) => repo.key.toLowerCase() === pastedKey || repo.full_name.toLowerCase() === pastedKey);
+  const offered = search.pasted && !listed && search.filter.trim().includes("/") ? search.pasted : null;
+  let start = offered ? 1 : 0;
+  const sections = repoSections(all, { owner: offered ? ALL_OWNERS : search.owner, query: search.query, account, selected })
+    .map((section) => {
+      const indexed = { ...section, start };
+      start += section.repos.length;
+      return indexed;
+    });
+  const options = [...(offered ? [offered] : []), ...sections.flatMap((section) => section.repos.map((repo) => repo.key))];
+  const owners = ownerFilters(repos, account);
+  for (const owner of knownOwners) {
+    if (owner && !owners.some((candidate) => candidate.owner.toLowerCase() === owner.toLowerCase())) {
+      owners.push({ owner, count: 0 });
+    }
+  }
+  const unknown = selected.filter((key) => !all.some((repo) => repo.key === key) && !key.includes("/"));
+  return { repos: all, query: search.query, offered, sections, options, owners, unknown };
 }
 
 /** The last push, short: `now`, `5m`, `2h`, `3d`, `3w`, `2mo`, `1y`. */
