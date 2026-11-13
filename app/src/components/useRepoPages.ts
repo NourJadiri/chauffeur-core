@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { RepoInfo } from "@chauffeur/protocol";
 import { mergeRepos } from "@/lib/repoPicker";
 import { errorMessage } from "@/lib/rpc";
-import { client, useApp } from "@/state/app";
+import { client, rememberRepos } from "@/state/app";
 
 type PageState = {
   repos: RepoInfo[];
@@ -15,8 +15,9 @@ type PageState = {
 
 const EMPTY: PageState = { repos: [], loading: false, nextCursor: null, error: null, refreshedAt: null, truncated: false };
 
-export function useRepoPages(owner: string, query: string, source: string, enabled: boolean) {
-  const revision = useApp((state) => state.reposRevision);
+type RepoPageQuery = { owner: string; query: string; source: string; enabled: boolean; revision: number };
+
+export function useRepoPages({ owner, query, source, enabled, revision }: RepoPageQuery) {
   const [state, setState] = useState<PageState>(EMPTY);
   const actions = useRef({ more: () => {}, refresh: () => {}, retry: () => {} });
 
@@ -40,10 +41,10 @@ export function useRepoPages(owner: string, query: string, source: string, enabl
           return;
         }
         nextCursor = result.next_cursor ?? null;
-        useApp.setState((current) => ({ repos: mergeRepos(current.repos ?? [], result.repos) }));
+        rememberRepos(result.repos);
         setState((current) => ({
+          ...current,
           repos: cursor ? mergeRepos(current.repos, result.repos) : result.repos,
-          loading: true,
           nextCursor,
           error: null,
           refreshedAt: result.refreshed_at ?? null,

@@ -25,7 +25,6 @@ import type { DesignOption } from "@/lib/designs";
 import {
   type CreateDraft,
   client,
-  loadRepos,
   leaveOfficeFor,
   openCreate,
   openOfficeChat,
@@ -53,9 +52,6 @@ import {
   KIND_HINTS,
   type LinkedTicket,
   startsTicket,
-  toggledRepo,
-  withoutTicketRepos,
-  withTicketRepos,
 } from "@/lib/newWorkspace";
 import { AttachButton, DropOverlay, ImageStrip, useImageAttachments } from "./chat/ImageAttachments";
 import { useSlashMenu } from "./chat/useSlashMenu";
@@ -66,6 +62,7 @@ import { StateDot, useTicketSearch } from "./TicketSearch";
 import { GithubSetup } from "./GithubSetup";
 import { ClaudeArtifactImport } from "./ClaudeArtifactImport";
 import { RepoPopover } from "./RepoPicker";
+import { useWorkspaceRepoSelection } from "./useWorkspaceRepoSelection";
 import { Button, cx, DesignOnlyMode, Kbd, Modal, Popover, ReadOnlyMode } from "./ui";
 import { signIn, useIdentity } from "@/state/identity";
 import { kbd } from "../lib/keys";
@@ -99,8 +96,6 @@ function CreateForm({ onClose }: { onClose: () => void }) {
     );
     return () => { live = false; };
   }, []);
-  const repos = useApp((s) => s.repos);
-  const reposError = useApp((s) => s.reposError);
   // An exploration: the repos at their base branch, read-only chats. Chosen when opening.
   // A creation that failed after the dialog closed comes back filled in, with its error.
   const [retry] = useState(takeCreateRetry);
@@ -110,11 +105,12 @@ function CreateForm({ onClose }: { onClose: () => void }) {
   // A child workspace of this one: a workspace, never an exploration, on the parent's repos at first.
   const [parentId] = useState(() => retry?.draft.parent ?? useApp.getState().createParent);
   const parent = useApp((s) => (parentId ? s.workspaces[parentId] : undefined));
-  const [selected, setSelected] = useState<string[] | null>(() => {
-    const inherited = parent ? workspaceRepoNames(parent) : [];
-    return retry?.draft.repos ?? (inherited.length > 0 ? inherited : null);
+  const inherited = parent ? workspaceRepoNames(parent) : [];
+  const repoChoice = useWorkspaceRepoSelection({
+    selection: retry?.draft.repos ?? (inherited.length > 0 ? inherited : null),
+    sources: retry?.draft.repoSources ?? {},
   });
-  const [repoSources, setRepoSources] = useState<Record<string, string>>(retry?.draft.repoSources ?? {});
+  const { repos, selection, sources: repoSources, pending: reposPending, empty: noRepo, toggle: toggleRepo } = repoChoice;
   const [tickets, setTickets] = useState<TicketRef[]>(retry?.draft.tickets ?? []);
   const [linked, setLinked] = useState<Record<string, LinkedTicket>>(retry?.draft.linked ?? {});
   const [workspaceShare, setWorkspaceShare] = useState(retry?.draft.workspaceShare ?? useApp.getState().createWorkspaceShare);
@@ -160,28 +156,11 @@ function CreateForm({ onClose }: { onClose: () => void }) {
     promptRef.current?.focus();
   }, [prefill]);
 
-  useEffect(() => {
-    if (repos == null) void loadRepos();
-  }, [repos]);
-
-  // Defaults preselected once the repo list is known; none when it cannot be listed.
-  useEffect(() => {
-    if (selected == null && repos) setSelected(repos.filter((r) => r.is_default).map((r) => r.key));
-    else if (selected == null && reposError) setSelected([]);
-  }, [repos, reposError, selected]);
-  const selection = selected ?? [];
-  const choiceOfRepos = { selection, sources: repoSources };
-  const setChoiceOfRepos = (next: { selection: string[]; sources: Record<string, string> }) => {
-    setSelected(next.selection);
-    setRepoSources(next.sources);
-  };
   // `/` lists the skills of the chosen repos' clones, as the first chat will see them.
   const slash = useSlashMenu(prompt, { repos: selection, agent: choice.agent }, (command) => {
     setPrompt(`/${command.name} `);
     promptRef.current?.focus();
   });
-
-  const toggleRepo = (repo: string) => setChoiceOfRepos(toggledRepo(choiceOfRepos, repo));
 
   const addTicket = (ticket: TicketRef, ticketRepos: string[], issue: LinearIssue | null) => {
     setTickets((current) =>
@@ -199,16 +178,15 @@ function CreateForm({ onClose }: { onClose: () => void }) {
         },
       }));
     }
-    if (ticketRepos.length > 0) setChoiceOfRepos(withTicketRepos(choiceOfRepos, ticket.identifier, ticketRepos));
+    if (ticketRepos.length > 0) repoChoice.addTicket(ticket.identifier, ticketRepos);
   };
   const removeTicket = (identifier: string) => {
     setTickets((current) => current.filter((t) => t.identifier !== identifier));
-    setChoiceOfRepos(withoutTicketRepos(choiceOfRepos, identifier));
+    repoChoice.removeTicket(identifier);
   };
 
   const shareLink = importing && kind !== "design" ? workspaceShare.trim() : "";
   const designLink = importingDesign && kind === "design" ? designShare.trim() : "";
-  const noRepo = selected != null && selection.length === 0;
   const claudeImport = isClaudeArtifactLink(designLink);
   const [claudeReadyLink, setClaudeReadyLink] = useState("");
 
@@ -218,7 +196,7 @@ function CreateForm({ onClose }: { onClose: () => void }) {
       setError({ message: "The images are still loading.", created: false, branch: null });
       return;
     }
-    if (selected == null || (noRepo && !designChat)) return;
+    if (reposPending || (noRepo && !designChat)) return;
     if (claudeImport && claudeReadyLink !== designLink) return;
     if (designLink && !isDesignShareLink(designLink) && !claudeImport) {
       setError({ message: "Paste a Chauffeur design or public Claude artifact link, or close the import.", created: false, branch: null });
@@ -389,8 +367,8 @@ function CreateForm({ onClose }: { onClose: () => void }) {
             variant="primary"
             onClick={submit}
             busy={creating}
-            disabled={selected == null || (noRepo && !designChat) || (claudeImport && claudeReadyLink !== designLink)}
-            title={selected == null ? "Listing the repos…" : noRepo && !designChat ? "Pick at least one repo" : undefined}
+            disabled={reposPending || (noRepo && !designChat) || (claudeImport && claudeReadyLink !== designLink)}
+            title={reposPending ? "Listing the repos…" : noRepo && !designChat ? "Pick at least one repo" : undefined}
             data-testid="create-workspace"
           >
             {label} <Kbd>{kbd("⌘↵")}</Kbd>
@@ -530,7 +508,7 @@ function CreateForm({ onClose }: { onClose: () => void }) {
               {designChat ? "Read from" : "Repos"}
             </PropLabel>
             <PropValue>
-              {selected == null ? (
+              {reposPending ? (
                 <span className="inline-flex h-[22px] items-center gap-[5px] rounded-[5px] bg-accent/15 px-[7px] text-[12px] text-accent opacity-60">
                   <Loader2 size={11} className="animate-spin" /> defaults…
                 </span>
@@ -548,7 +526,7 @@ function CreateForm({ onClose }: { onClose: () => void }) {
                 Add repo
               </AddButton>
               {designChat && selection.length > 0 && (
-                <Button variant="ghost" size="sm" onClick={() => setChoiceOfRepos({ selection: [], sources: {} })} data-testid="without-repos">
+                <Button variant="ghost" size="sm" onClick={repoChoice.clear} data-testid="without-repos">
                   Without repo
                 </Button>
               )}

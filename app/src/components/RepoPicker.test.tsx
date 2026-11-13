@@ -1,46 +1,10 @@
-import { expect, spyOn, test } from "bun:test";
-import type { GithubStatus, RepoInfo, ReposListResult, ReposPageParams, ReposPageResult } from "@chauffeur/protocol";
-import { Window } from "happy-dom";
+import { expect, spyOn } from "bun:test";
+import type { GithubStatus, ReposListResult, ReposPageParams, ReposPageResult } from "@chauffeur/protocol";
 import { act, StrictMode } from "react";
+import { deferred, domTest } from "@/test/dom";
+import { repo, repoPage as page } from "@/test/repos";
 
-function repo(name: string, isDefault = false): RepoInfo {
-  return {
-    key: name, name, full_name: `acme/${name}`, owner: "acme", owner_is_org: true,
-    private: true, local: false, clone_path: null, default_branch: "main", description: null,
-    pushed_at: null, last_used: null, is_default: isDefault,
-  };
-}
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((done) => { resolve = done; });
-  return { promise, resolve };
-}
-
-const page = (repos: RepoInfo[], next?: string): ReposPageResult => ({
-  repos, next_cursor: next, truncated: false, refreshed_at: "2026-11-12T12:00:00Z",
-});
-
-test("new workspace uses cached defaults, loads only requested pages and keeps selections through search races and retries", async () => {
-  if (process.env.REPO_PICKER_ISOLATED !== "1") {
-    const child = Bun.spawn([process.execPath, "test", import.meta.path], {
-      env: { ...process.env, REPO_PICKER_ISOLATED: "1" },
-      stdout: "pipe", stderr: "pipe",
-    });
-    const [status, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
-    if (status !== 0) throw new Error(`${stdout}\n${stderr}`);
-    return;
-  }
-  const browser = new Window();
-  const globals = {
-    window: browser, document: browser.document, localStorage: browser.localStorage,
-    navigator: browser.navigator, HTMLElement: browser.HTMLElement, Node: browser.Node, Event: browser.Event,
-    requestAnimationFrame: browser.requestAnimationFrame.bind(browser),
-    cancelAnimationFrame: browser.cancelAnimationFrame.bind(browser), IS_REACT_ACT_ENVIRONMENT: true,
-  };
-  const previous = new Map(Object.keys(globals).map((key) => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
-  for (const [key, value] of Object.entries(globals)) Object.defineProperty(globalThis, key, { configurable: true, value });
-  const { createRoot } = await import("react-dom/client");
+domTest("new workspace uses cached defaults, loads only requested pages and keeps selections through search races and retries", import.meta.path, async ({ render, click, fill, until }) => {
   const { CreateWorkspaceDialog } = await import("./CreateWorkspaceDialog");
   const { client, loadAllRepos, loadRepos, useApp } = await import("@/state/app");
   const before = useApp.getState();
@@ -71,33 +35,10 @@ test("new workspace uses cached defaults, loads only requested pages and keeps s
     }
     throw new Error(`Unexpected RPC: ${method}`);
   });
-  const container = document.createElement("div");
-  document.body.append(container);
-  const root = createRoot(container);
-  const until = async (check: () => boolean) => {
-    const deadline = Date.now() + 3000;
-    while (!check()) {
-      if (Date.now() > deadline) throw new Error(`UI did not reach the expected state: ${document.body.textContent}`);
-      await act(async () => { await new Promise((resolve) => setTimeout(resolve, 5)); });
-    }
-  };
-  const click = async (selector: string) => {
-    const button = document.querySelector<HTMLButtonElement>(selector);
-    if (!button) throw new Error(`Missing button: ${selector}`);
-    await act(async () => { button.click(); });
-  };
-  const type = async (text: string) => {
-    const input = document.querySelector<HTMLInputElement>('[data-testid="repo-filter"]');
-    if (!input) throw new Error("Missing repo search");
-    await act(async () => {
-      const setter = Object.getOwnPropertyDescriptor(browser.HTMLInputElement.prototype, "value")?.set;
-      setter?.call(input, text);
-      input.dispatchEvent(new Event("input", { bubbles: true }));
-    });
-  };
+  const type = (text: string) => fill('[data-testid="repo-filter"]', text);
   try {
     const startup = loadRepos();
-    await act(async () => { root.render(<StrictMode><CreateWorkspaceDialog /></StrictMode>); });
+    await render(<StrictMode><CreateWorkspaceDialog /></StrictMode>);
     expect(calls.filter((method) => method === "repos.cached")).toHaveLength(1);
     expect(calls).not.toContain("repos.list");
     await act(async () => {
@@ -164,13 +105,8 @@ test("new workspace uses cached defaults, loads only requested pages and keeps s
     expect(document.querySelector('[role="dialog"]')?.textContent).toContain("new-default");
     expect(document.querySelector('[role="dialog"]')?.textContent).not.toContain("default-outside-page");
   } finally {
-    await act(async () => { root.unmount(); });
+    await render(null);
     rpc.mockRestore();
     useApp.setState(before, true);
-    await browser.happyDOM.close();
-    for (const [key, descriptor] of previous) {
-      if (descriptor) Object.defineProperty(globalThis, key, descriptor);
-      else Reflect.deleteProperty(globalThis, key);
-    }
   }
-}, 15_000);
+});

@@ -26,9 +26,9 @@ import { version as APP_VERSION } from "../../package.json";
 import appIcon from "../../src-tauri/icons/128x128@2x.png";
 import {
   client,
+  loadAllRepos,
   loadLoadout,
   loadModels,
-  loadAllRepos,
   openSettings,
   playNotificationSound,
   setAppearance,
@@ -37,6 +37,7 @@ import {
   toast,
   useApp,
 } from "@/state/app";
+import { useRepoCatalog } from "@/state/repos";
 import { RepoOrder } from "./RepoOrder";
 import { ModelPicker } from "./ModelPicker";
 import { LlmFavorites } from "./LlmFavorites";
@@ -298,11 +299,7 @@ function ErrorReportsChoice({ settings, update, busy }: SectionProps) {
 }
 
 function Workspaces({ settings, update, busy }: SectionProps) {
-  const reposError = useApp((s) => s.reposError);
-  const repos = useApp((s) => s.repos);
-  useEffect(() => {
-    void loadAllRepos();
-  }, []);
+  const { repos, error: reposError, refresh } = useRepoCatalog("all");
   const { default_repos, branch_prefix, github_login, clone_roots } = settings.workspaces;
   const w = settings.workspaces;
   const [org, setOrg] = useState(w.github_org);
@@ -330,7 +327,7 @@ function Workspaces({ settings, update, busy }: SectionProps) {
           testId="default-repos"
         />
       </Field>
-      <RepoOrder repos={repos} order={w.repo_order} busy={busy} error={reposError} onRefresh={() => loadAllRepos(true)}
+      <RepoOrder repos={repos} order={w.repo_order} busy={busy} error={reposError} onRefresh={refresh}
         onSave={(repo_order) => void update({ workspaces: { repo_order } })} />
       <Field label="Branch prefix" hint={<span className="font-mono">{example}</span>}>
         <input

@@ -22,7 +22,8 @@ import { errorMessage, isNotImplemented } from "@/lib/rpc";
 import { ticketsCollapsed, ticketsEditable, ticketTooltip, ticketUnread, withoutTicket, withTicket } from "@/lib/tickets";
 import type { LogEntry } from "@/lib/workspaceLive";
 import { type RemoteOpen, watchRemote } from "@/lib/workers";
-import { client, loadAllRepos, toast, upsertWorkspace, useApp } from "@/state/app";
+import { client, toast, upsertWorkspace } from "@/state/app";
+import { useRepoCatalog } from "@/state/repos";
 import { useWorkspaceSelector, useWorkspaceSession, type WorkspaceSession } from "@/state/session";
 import { OpenButton } from "./OpenButton";
 import { PrRow, type PrStatus } from "./PrChips";
@@ -668,13 +669,10 @@ function LogList({ entries, empty }: { entries: LogEntry[]; empty: string }) {
 
 function AddRepoButton({ workspace }: { workspace: WorkspaceInfo }) {
   const [open, setOpen] = useState(false);
-  const repos = useApp((s) => s.repos);
+  const { repos } = useRepoCatalog("all", open);
   const [filter, setFilter] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
   const existing = workspaceRepos(workspace);
-  useEffect(() => {
-    if (open) void loadAllRepos();
-  }, [open]);
   const candidates = (repos ?? [])
     .filter((r) => !existing.includes(r.name))
     .filter((r) => !filter || r.key.toLowerCase().includes(filter.toLowerCase()));
