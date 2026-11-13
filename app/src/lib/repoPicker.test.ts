@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { RepoInfo } from "@chauffeur/protocol";
-import { cachedPickerRepos, githubRepoRef, mainOwner, mergeRepos, ownerAvatar, ownerFilters, repoSections, shortAge, showsOwner } from "./repoPicker";
+import { cachedPickerRepos, githubRepoRef, mainOwner, mergeRepos, ownerAvatar, ownerFilters, repoPickerSearch, repoPickerView, repoSections, shortAge, showsOwner } from "./repoPicker";
 
 const repo = (fullName: string, extra: Partial<RepoInfo> = {}): RepoInfo => {
   const [owner, name] = fullName.split("/");
@@ -116,4 +116,46 @@ test("a large cache stays bounded without hiding defaults, selected repos, recen
   const merged = mergeRepos(visible, [updated]);
   expect(merged).toHaveLength(54);
   expect(merged[0].description).toBe("Updated");
+});
+
+test("only an owner search requests GitHub pages; all-owner text and pasted URLs stay local", () => {
+  expect(repoPickerSearch("", "api")).toMatchObject({ remoteEnabled: false, remoteQuery: "", showScopeHint: true });
+  expect(repoPickerSearch("acme", " api ")).toMatchObject({ remoteEnabled: true, remoteQuery: "api", showScopeHint: false });
+  expect(repoPickerSearch("acme", "https://github.com/other/api")).toMatchObject({ remoteEnabled: false, pasted: "other/api", query: "other/api" });
+  expect(repoPickerSearch("", "")).toMatchObject({ remoteEnabled: true, showScopeHint: false });
+});
+
+test("pasted offers and grouped rows share one navigation order, without treating a known URL as a new repo", () => {
+  const adapter = repo("acme/adapter", { description: "Supports external/new" });
+  const view = repoPickerView({
+    repos: all,
+    pages: [adapter],
+    selected: ["from-ticket"],
+    search: repoPickerSearch("octocat", "external/new"),
+    account: "octocat",
+    knownOwners: ["ACME", "another-org"],
+  });
+  expect(view.offered).toBe("external/new");
+  expect(view.options).toEqual(["external/new", "adapter"]);
+  expect(view.sections[0].start).toBe(1);
+  expect(view.unknown).toEqual(["from-ticket"]);
+  expect(view.owners.filter((owner) => owner.owner.toLowerCase() === "acme")).toHaveLength(1);
+  expect(view.owners.at(-1)).toEqual({ owner: "another-org", count: 0 });
+  const known = repoPickerView({
+    repos: all, pages: [], selected: [], account: "octocat", knownOwners: [],
+    search: repoPickerSearch("", "https://github.com/ACME/api"),
+  });
+  expect(known.offered).toBeNull();
+  expect(known.options).toEqual(["api"]);
+  expect(known.sections[0].start).toBe(0);
+});
+
+test("all-owner filtering still finds loaded repos outside the initial browse window", () => {
+  const repos = Array.from({ length: 100 }, (_, index) => repo(`acme/repo-${index}`));
+  const view = repoPickerView({
+    repos, pages: [], selected: [], account: null, knownOwners: [],
+    search: repoPickerSearch("", "repo-99"),
+  });
+  expect(view.options).toEqual(["repo-99"]);
+  expect(view.sections[0].start).toBe(0);
 });

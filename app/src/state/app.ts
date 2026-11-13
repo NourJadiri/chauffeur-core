@@ -1178,6 +1178,10 @@ export function loadAllRepos(refresh = false): Promise<void> {
   return readRepos("repos.list", refresh);
 }
 
+export function rememberRepos(repos: RepoInfo[]) {
+  set((state) => ({ repos: mergeRepos(state.repos ?? [], repos) }));
+}
+
 function readRepos(method: "repos.cached" | "repos.list", refresh: boolean): Promise<void> {
   const existing = repoLoads.get(method);
   if (existing && !refresh) return existing;

@@ -42,11 +42,6 @@ export function useGithubStatus(): { status: GithubStatus | null; error: string 
   return { status, error };
 }
 
-/** The GitHub account signed in, as last read (the creation dialog's checklist reads it). */
-export function useGithubAccount(): string | null {
-  return useGithub((s) => s.status?.account ?? null);
-}
-
 export function useGithubSource(): GithubStatus | null {
   return useGithub((s) => s.status);
 }
